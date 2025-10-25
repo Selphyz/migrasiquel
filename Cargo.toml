@@ -1,7 +1,17 @@
 [package]
 name = "migrasquiel"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-clap = { version = "4.5.39", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
+mysql_async = "0.34"
+mysql_common = "0.32"
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+indicatif = "0.17"
+flate2 = "1.0"
+async-trait = "0.1"
+hex = "0.4"
+futures = "0.3"
+chrono = "0.4"
