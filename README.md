@@ -1,10 +1,10 @@
 # Migrasquiel
 
-A fast, pure-Rust database migration tool for MySQL/MariaDB, PostgreSQL, and SQL Server with support for dumping, restoring, and direct server-to-server migrations.
+A fast, pure-Rust database migration tool for MySQL/MariaDB and PostgreSQL with support for dumping, restoring, and direct server-to-server migrations.
 
 ## Features
 
-- **Multi-engine Support**: One binary handles MySQL/MariaDB (`mysql_async`), PostgreSQL (`sqlx`), and SQL Server (`tiberius`)
+- **Multi-engine Support**: One binary handles MySQL/MariaDB (`mysql_async`) and PostgreSQL (`sqlx`)
 - **Streaming Architecture**: Handles databases of any size with minimal memory usage
 - **Three Operation Modes**: Dump, restore, and direct migrate
 - **Consistent Snapshots**: Optional REPEATABLE READ transactions for point-in-time consistency
@@ -296,14 +296,6 @@ Planned features for future versions:
 - `--continue-on-error` flag for partial migrations
 - Custom SQL transformations during migration
 - Dry-run mode
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
 
 ## Technical Details
 
