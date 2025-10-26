@@ -2,7 +2,10 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(name = "migrasquiel")]
-#[command(about = "MySQL/MariaDB database migration tool", long_about = None)]
+#[command(
+    about = "Database migration tool for MySQL, PostgreSQL, and SQL Server",
+    long_about = None
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -12,7 +15,7 @@ pub struct Cli {
 pub enum Commands {
     /// Dump database to SQL file
     Dump {
-        /// Source database URL (mysql://user:pass@host:port/db)
+        /// Source database URL (mysql://, postgres://, or mssql://)
         #[arg(short, long)]
         source: Option<String>,
 
@@ -24,8 +27,8 @@ pub enum Commands {
         #[arg(short, long)]
         output: String,
 
-        /// Database provider (currently only 'mysql')
-        #[arg(long, default_value = "mysql")]
+        /// Database provider (mysql|postgres|sqlserver)
+        #[arg(long, default_value = "mysql", value_parser = ["mysql", "postgres", "sqlserver"])]
         provider: String,
 
         /// Tables to include (comma-separated)
@@ -59,7 +62,7 @@ pub enum Commands {
 
     /// Restore database from SQL file
     Restore {
-        /// Destination database URL (mysql://user:pass@host:port/db)
+        /// Destination database URL (mysql://, postgres://, or mssql://)
         #[arg(short, long)]
         destination: Option<String>,
 
@@ -71,8 +74,8 @@ pub enum Commands {
         #[arg(short, long)]
         input: String,
 
-        /// Database provider (currently only 'mysql')
-        #[arg(long, default_value = "mysql")]
+        /// Database provider (mysql|postgres|sqlserver)
+        #[arg(long, default_value = "mysql", value_parser = ["mysql", "postgres", "sqlserver"])]
         provider: String,
 
         /// Disable foreign key checks during restore
@@ -82,7 +85,7 @@ pub enum Commands {
 
     /// Migrate database directly from source to destination
     Migrate {
-        /// Source database URL (mysql://user:pass@host:port/db)
+        /// Source database URL (mysql://, postgres://, or mssql://)
         #[arg(short, long)]
         source: Option<String>,
 
@@ -90,7 +93,7 @@ pub enum Commands {
         #[arg(long)]
         source_env: Option<String>,
 
-        /// Destination database URL (mysql://user:pass@host:port/db)
+        /// Destination database URL (mysql://, postgres://, or mssql://)
         #[arg(short, long)]
         destination: Option<String>,
 
@@ -98,8 +101,8 @@ pub enum Commands {
         #[arg(long)]
         destination_env: Option<String>,
 
-        /// Database provider (currently only 'mysql')
-        #[arg(long, default_value = "mysql")]
+        /// Database provider (mysql|postgres|sqlserver)
+        #[arg(long, default_value = "mysql", value_parser = ["mysql", "postgres", "sqlserver"])]
         provider: String,
 
         /// Tables to include (comma-separated)

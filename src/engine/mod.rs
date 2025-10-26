@@ -1,11 +1,18 @@
+pub mod dialect;
 pub mod mysql;
+pub mod postgres;
+pub mod value;
 
+use crate::engine::dialect::SqlDialect;
+use crate::engine::value::SqlValue;
 use anyhow::Result;
 use async_trait::async_trait;
-use mysql_common::value::Value;
+use futures::Stream;
+use std::pin::Pin;
 
 /// Stream of rows from a database query
-pub type RowStream = std::pin::Pin<Box<dyn futures::Stream<Item = Result<Vec<Value>>> + Send>>;
+pub type RowStream =
+    Pin<Box<dyn Stream<Item = Result<Vec<SqlValue>>> + Send>>;
 
 /// Database engine trait for provider abstraction
 #[async_trait]
@@ -17,6 +24,9 @@ pub trait DbEngine: Send + Sync {
 /// Active database session for executing queries
 #[async_trait]
 pub trait DbSession: Send {
+    /// Dialect helper for identifier/literal formatting
+    fn dialect(&self) -> &'static dyn SqlDialect;
+
     /// Start a consistent snapshot transaction (REPEATABLE READ)
     async fn start_consistent_snapshot(&mut self) -> Result<()>;
 
@@ -28,7 +38,7 @@ pub trait DbSession: Send {
     async fn show_create_table(&mut self, table: &str) -> Result<String>;
 
     /// Stream all rows from a table
-    /// Returns rows as Vec<Value> in column order
+    /// Returns rows as Vec<SqlValue> in column order
     async fn stream_rows(&mut self, table: &str) -> Result<(Vec<String>, RowStream)>;
 
     /// Get approximate row count for a table (for progress indication)
@@ -39,7 +49,7 @@ pub trait DbSession: Send {
         &mut self,
         table: &str,
         column_names: &[String],
-        rows: &[Vec<Value>],
+        rows: &[Vec<SqlValue>],
     ) -> Result<()>;
 
     /// Disable foreign key checks
@@ -59,6 +69,7 @@ pub trait DbSession: Send {
 pub fn create_engine(provider: &str) -> Result<Box<dyn DbEngine>> {
     match provider.to_lowercase().as_str() {
         "mysql" => Ok(Box::new(mysql::MysqlEngine)),
+        "postgres" => Ok(Box::new(postgres::PostgresEngine)),
         _ => Err(anyhow::anyhow!("Unsupported database provider: {}", provider)),
     }
 }

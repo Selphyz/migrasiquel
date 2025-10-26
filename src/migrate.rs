@@ -1,8 +1,9 @@
+use crate::engine::dialect::SqlDialect;
+use crate::engine::value::SqlValue;
 use crate::engine::{DbEngine, DbSession};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use mysql_common::value::Value;
 
 pub struct MigrateOptions {
     pub tables: Vec<String>,
@@ -30,7 +31,14 @@ pub async fn migrate(
     println!("Connecting to destination database...");
     let mut dest = engine.connect(destination_url).await
         .context("Failed to connect to destination database")?;
-    
+
+    let src_dialect = source.dialect();
+    let dest_dialect = dest.dialect();
+
+    if src_dialect.name() != dest_dialect.name() {
+        bail!("Cross-engine migrations are not supported in this release");
+    }
+
     // Start consistent snapshot on source if requested
     if opts.consistent_snapshot {
         println!("Starting consistent snapshot on source...");
@@ -51,7 +59,7 @@ pub async fn migrate(
     for (idx, table) in tables.iter().enumerate() {
         println!("\n[{}/{}] Migrating table '{}'...", idx + 1, tables.len(), table);
         
-        migrate_table(&mut *source, &mut *dest, table, &opts).await
+        migrate_table(&mut *source, &mut *dest, table, dest_dialect, &opts).await
             .with_context(|| format!("Failed to migrate table '{}'", table))?;
     }
     
@@ -75,6 +83,7 @@ async fn migrate_table(
     source: &mut dyn DbSession,
     dest: &mut dyn DbSession,
     table: &str,
+    _dest_dialect: &dyn SqlDialect,
     opts: &MigrateOptions,
 ) -> Result<()> {
     // Migrate schema
@@ -83,11 +92,12 @@ async fn migrate_table(
         let create_stmt = source.show_create_table(table).await?;
         
         // Drop table first if it exists
-        let drop_stmt = format!("DROP TABLE IF EXISTS `{}`", table.replace('`', "``"));
+        let drop_stmt = format!("DROP TABLE IF EXISTS `{}`;", table);
         dest.execute(&drop_stmt).await?;
         
         // Create table
-        dest.execute(&create_stmt).await?;
+        let normalized_create = create_stmt.trim_end_matches(';');
+        dest.execute(normalized_create).await?;
     }
     
     // Migrate data
@@ -114,7 +124,7 @@ async fn migrate_table(
         // Stream rows from source
         let (columns, mut row_stream) = source.stream_rows(table).await?;
         
-        let mut batch: Vec<Vec<Value>> = Vec::with_capacity(opts.batch_rows);
+        let mut batch: Vec<Vec<SqlValue>> = Vec::with_capacity(opts.batch_rows);
         let mut total_rows = 0u64;
         
         while let Some(row_result) = row_stream.next().await {

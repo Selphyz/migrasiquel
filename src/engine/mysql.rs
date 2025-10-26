@@ -1,4 +1,7 @@
 use super::{DbEngine, DbSession, RowStream};
+use crate::engine::dialect::SqlDialect;
+use crate::engine::value::SqlValue;
+use crate::util::dialects::mysql::MYSQL_DIALECT;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::stream;
@@ -11,10 +14,12 @@ pub struct MysqlEngine;
 impl DbEngine for MysqlEngine {
     async fn connect(&self, url: &str) -> Result<Box<dyn DbSession>> {
         let pool = Pool::new(url);
-        let conn = pool.get_conn().await
+        let conn = pool
+            .get_conn()
+            .await
             .context("Failed to connect to MySQL database")?;
-        
-        Ok(Box::new(MysqlSession { 
+
+        Ok(Box::new(MysqlSession {
             conn,
             pool,
             in_transaction: false,
@@ -31,25 +36,32 @@ pub struct MysqlSession {
 
 #[async_trait]
 impl DbSession for MysqlSession {
+    fn dialect(&self) -> &'static dyn SqlDialect {
+        &MYSQL_DIALECT
+    }
+
     async fn start_consistent_snapshot(&mut self) -> Result<()> {
-        self.conn.query_drop("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ").await?;
-        self.conn.query_drop("START TRANSACTION WITH CONSISTENT SNAPSHOT").await?;
+        self.conn
+            .query_drop("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .await?;
+        self.conn
+            .query_drop("START TRANSACTION WITH CONSISTENT SNAPSHOT")
+            .await?;
         self.in_transaction = true;
         Ok(())
     }
 
     async fn list_tables(&mut self, include: &[String], exclude: &[String]) -> Result<Vec<String>> {
-        let mut tables: Vec<String> = self.conn
+        let mut tables: Vec<String> = self
+            .conn
             .query("SHOW TABLES")
             .await
             .context("Failed to list tables")?;
 
-        // Filter by include list if specified
         if !include.is_empty() {
             tables.retain(|t| include.contains(t));
         }
 
-        // Filter by exclude list
         if !exclude.is_empty() {
             tables.retain(|t| !exclude.contains(t));
         }
@@ -60,17 +72,15 @@ impl DbSession for MysqlSession {
     async fn show_create_table(&mut self, table: &str) -> Result<String> {
         let query = format!("SHOW CREATE TABLE `{}`", table.replace('`', "``"));
         let row: Option<Row> = self.conn.query_first(&query).await?;
-        
+
         let row = row.context("No CREATE TABLE result")?;
         let create_stmt: String = row.get(1).context("Missing CREATE TABLE statement")?;
-        
-        // Minify to single line and change to IF NOT EXISTS
+
         let minified = minify_create_table(&create_stmt);
         Ok(minified)
     }
 
     async fn stream_rows(&mut self, table: &str) -> Result<(Vec<String>, RowStream)> {
-        // Get column names from information_schema
         let query = format!(
             "SELECT COLUMN_NAME FROM information_schema.COLUMNS \
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{}' \
@@ -79,22 +89,21 @@ impl DbSession for MysqlSession {
         );
         let columns: Vec<String> = self.conn.query(&query).await?;
 
-        // Fetch all rows (we'll stream from the result vector)
-        // Note: For truly large tables, this could be optimized with LIMIT/OFFSET pagination
         let query = format!("SELECT * FROM `{}`", table.replace('`', "``"));
         let rows: Vec<Row> = self.conn.query(&query).await?;
-        
-        // Convert rows to Vec<Vec<Value>> and create a stream
-        let value_rows: Vec<Result<Vec<Value>>> = rows.into_iter()
+
+        let value_rows: Vec<Result<Vec<SqlValue>>> = rows
+            .into_iter()
             .map(|row| {
-                let mut values = Vec::new();
+                let mut values = Vec::with_capacity(row.len());
                 for i in 0..row.len() {
-                    values.push(row.get(i).unwrap_or(Value::NULL));
+                    let mysql_value: Value = row.get(i).unwrap_or(Value::NULL);
+                    values.push(convert_value(mysql_value));
                 }
                 Ok(values)
             })
             .collect();
-        
+
         let row_stream = stream::iter(value_rows);
 
         Ok((columns, Box::pin(row_stream)))
@@ -106,7 +115,7 @@ impl DbSession for MysqlSession {
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{}'",
             table.replace('\'', "''")
         );
-        
+
         let count: Option<u64> = self.conn.query_first(&query).await?;
         Ok(count.unwrap_or(0))
     }
@@ -115,16 +124,18 @@ impl DbSession for MysqlSession {
         &mut self,
         table: &str,
         column_names: &[String],
-        rows: &[Vec<Value>],
+        rows: &[Vec<SqlValue>],
     ) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
 
-        let sql = crate::util::sql_escape::generate_insert_statement(table, column_names, rows);
-        self.conn.query_drop(sql).await
+        let sql = MYSQL_DIALECT.insert_values_sql(table, column_names, rows);
+        self.conn
+            .query_drop(sql)
+            .await
             .with_context(|| format!("Failed to insert batch into table '{}'", table))?;
-        
+
         Ok(())
     }
 
@@ -141,7 +152,9 @@ impl DbSession for MysqlSession {
     }
 
     async fn execute(&mut self, sql: &str) -> Result<()> {
-        self.conn.query_drop(sql).await
+        self.conn
+            .query_drop(sql)
+            .await
             .context("Failed to execute SQL statement")?;
         Ok(())
     }
@@ -155,16 +168,63 @@ impl DbSession for MysqlSession {
     }
 }
 
+fn convert_value(value: Value) -> SqlValue {
+    match value {
+        Value::NULL => SqlValue::Null,
+        Value::Bytes(bytes) => match String::from_utf8(bytes.clone()) {
+            Ok(s) => SqlValue::String(s),
+            Err(_) => SqlValue::Bytes(bytes),
+        },
+        Value::Int(v) => SqlValue::Int(v),
+        Value::UInt(v) => {
+            if v <= i64::MAX as u64 {
+                SqlValue::Int(v as i64)
+            } else {
+                SqlValue::Decimal(v.to_string())
+            }
+        }
+        Value::Float(v) => SqlValue::Float(v as f64),
+        Value::Double(v) => SqlValue::Float(v),
+        Value::Date(year, month, day, hour, minute, second, micro) => {
+            if hour == 0 && minute == 0 && second == 0 && micro == 0 {
+                SqlValue::Date {
+                    y: i32::from(year),
+                    m: u32::from(month),
+                    d: u32::from(day),
+                }
+            } else {
+                SqlValue::Timestamp {
+                    y: i32::from(year),
+                    m: u32::from(month),
+                    d: u32::from(day),
+                    hh: u32::from(hour),
+                    mm: u32::from(minute),
+                    ss: u32::from(second),
+                    us: micro,
+                }
+            }
+        }
+        Value::Time(neg, days, hours, minutes, seconds, micros) => {
+            let total_hours = days * 24 + u32::from(hours);
+            SqlValue::Time {
+                neg,
+                h: total_hours,
+                m: minutes as u32,
+                s: seconds as u32,
+                us: micros,
+            }
+        }
+    }
+}
+
 /// Minify CREATE TABLE statement to single line and add IF NOT EXISTS
 fn minify_create_table(create_stmt: &str) -> String {
-    // Remove extra whitespace and newlines
     let single_line = create_stmt
         .lines()
         .map(|l| l.trim())
         .collect::<Vec<_>>()
         .join(" ");
-    
-    // Add IF NOT EXISTS after CREATE TABLE
+
     if single_line.starts_with("CREATE TABLE") {
         single_line.replacen("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
     } else {

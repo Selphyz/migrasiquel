@@ -1,10 +1,10 @@
 # Migrasquiel
 
-A fast, pure-Rust MySQL/MariaDB database migration tool with support for dumping, restoring, and direct server-to-server migrations.
+A fast, pure-Rust database migration tool for MySQL/MariaDB, PostgreSQL, and SQL Server with support for dumping, restoring, and direct server-to-server migrations.
 
 ## Features
 
-- **Pure Rust Implementation**: No external MySQL tools required
+- **Multi-engine Support**: One binary handles MySQL/MariaDB (`mysql_async`), PostgreSQL (`sqlx`), and SQL Server (`tiberius`)
 - **Streaming Architecture**: Handles databases of any size with minimal memory usage
 - **Three Operation Modes**: Dump, restore, and direct migrate
 - **Consistent Snapshots**: Optional REPEATABLE READ transactions for point-in-time consistency
@@ -13,7 +13,7 @@ A fast, pure-Rust MySQL/MariaDB database migration tool with support for dumping
 - **Flexible Filtering**: Include/exclude specific tables
 - **Schema and Data Control**: Choose to migrate schema-only, data-only, or both
 - **Batched Inserts**: Configurable batch sizes for optimal performance
-- **Foreign Key Handling**: Automatic constraint management during migrations
+- **Foreign Key Handling**: Automatic constraint management during migrations (dialect aware)
 
 ## Installation
 
@@ -39,47 +39,46 @@ cargo install migrasquiel
 
 #### Dump
 
-Dump a database to a SQL file:
+Dump a database to a SQL file. The provider defaults to `mysql`; set `--provider` for PostgreSQL or SQL Server.
 
 ```bash
+# MySQL / MariaDB
 migrasquiel dump \
   --source "mysql://user:pass@localhost:3306/mydb" \
   --output backup.sql
-```
 
-With compression:
-
-```bash
+# PostgreSQL
 migrasquiel dump \
-  --source "mysql://user:pass@localhost:3306/mydb" \
-  --output backup.sql.gz \
+  --provider postgres \
+  --source "postgres://user:pass@localhost:5432/mydb" \
+  --output pg_backup.sql
+
+# SQL Server
+migrasquiel dump \
+  --provider sqlserver \
+  --source "mssql://user:pass@localhost:1433/mydb?encrypt=true&trustservercertificate=true" \
+  --output mssql_backup.sql.gz \
   --gzip
 ```
 
-Using environment variable for connection:
+Environment variables can still be used for connection strings:
 
 ```bash
-export MYSQL_SOURCE_URL="mysql://user:pass@localhost:3306/mydb"
+export POSTGRES_SOURCE_URL="postgres://user:pass@localhost:5432/mydb"
 migrasquiel dump \
-  --source-env MYSQL_SOURCE_URL \
+  --provider postgres \
+  --source-env POSTGRES_SOURCE_URL \
   --output backup.sql
 ```
 
 #### Restore
 
-Restore a database from a SQL file:
+Restore a database from a SQL file (automatically handles gzip files):
 
 ```bash
 migrasquiel restore \
-  --destination "mysql://user:pass@localhost:3306/newdb" \
-  --input backup.sql
-```
-
-Restore from compressed file:
-
-```bash
-migrasquiel restore \
-  --destination "mysql://user:pass@localhost:3306/newdb" \
+  --provider sqlserver \
+  --destination "mssql://user:pass@localhost:1433/newdb?encrypt=true&trustservercertificate=true" \
   --input backup.sql.gz
 ```
 
@@ -89,9 +88,18 @@ Direct server-to-server migration (no intermediate file):
 
 ```bash
 migrasquiel migrate \
-  --source "mysql://user:pass@source.host:3306/sourcedb" \
-  --destination "mysql://user:pass@dest.host:3306/destdb"
+  --provider postgres \
+  --source "postgres://user:pass@source.host:5432/sourcedb" \
+  --destination "postgres://user:pass@dest.host:5432/destdb"
 ```
+
+### Connection URL Formats
+
+- **MySQL / MariaDB**: `mysql://user:pass@host:3306/database`
+- **PostgreSQL**: `postgres://user:pass@host:5432/database?sslmode=require`
+- **SQL Server**: `mssql://user:pass@host:1433/database?encrypt=true&trustservercertificate=true`
+
+All providers accept environment variables (`--source-env`, `--destination-env`) and respect additional query parameters understood by their native clients.
 
 ## Advanced Options
 
@@ -237,8 +245,8 @@ Passwords in URLs are automatically redacted in console output.
 ### Design Principles
 
 - **Streaming-First**: All operations stream data to minimize memory usage
-- **Provider-Agnostic**: Core abstractions (`DbEngine`, `DbSession`) allow future support for PostgreSQL, SQLite, etc.
-- **Zero Native Dependencies**: Pure Rust implementation using `mysql_async`
+- **Provider-Agnostic**: Core abstractions (`DbEngine`, `DbSession`) keep engine-specific logic isolated
+- **Zero Native Dependencies**: Pure Rust implementation backed by async drivers (`mysql_async`, `sqlx`, `tiberius`)
 - **Fail-Fast with Context**: Clear error messages with context about what operation failed
 
 ### Performance Characteristics
@@ -254,14 +262,14 @@ Passwords in URLs are automatically redacted in console output.
 ### Connection Issues
 
 ```
-Error: Failed to connect to MySQL database
+Error: Failed to connect to <provider> database
 ```
 
 **Solutions**:
-- Verify the connection URL format
-- Check that the MySQL server is running
-- Ensure firewall allows connections
-- Verify user credentials and permissions
+- Verify the connection URL format (including TLS options for PostgreSQL/SQL Server)
+- Confirm the database service is running and reachable from the migrasquiel host
+- Ensure firewall rules permit inbound/outbound traffic on the target port
+- Check credentials and database-level permissions for the selected provider
 
 ### Large Tables
 
@@ -282,7 +290,6 @@ The tool uses UTF-8 by default. If you encounter encoding issues:
 
 Planned features for future versions:
 
-- PostgreSQL support
 - SQLite support  
 - Parallel table processing
 - Incremental backups
@@ -300,16 +307,15 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Technical Details
 
-### SQL Escaping
+### SQL Value Handling
 
-The tool properly handles:
+Column values are converted into an engine-neutral `SqlValue` enum before being rendered through the target dialect. This guarantees consistent handling for:
 
-- `NULL` values
-- Numeric types (INT, FLOAT, DOUBLE)
-- String escaping (quotes, backslashes, special chars)
-- Binary data (encoded as hex literals `0x...`)
-- Date/time values (with microsecond precision)
-- Special float values (NaN, Infinity)
+- `NULL`, booleans, signed/unsigned integers, and floating point types (with NaN/±Inf support)
+- Arbitrary-precision numerics (preserved as decimal strings)
+- Strings with proper quoting/escaping for each provider
+- Binary data (hex, `BYTEA`, or `0x` literals as appropriate)
+- Date, time, and timestamp values with microsecond precision
 
 ### Transaction Handling
 
@@ -319,14 +325,13 @@ The tool properly handles:
 
 ### Generated SQL Format
 
-Dump files use the standard MySQL format:
+Dump files are rendered through each engine's dialect so that identifiers, literals, and bulk INSERT statements match native tooling expectations:
 
-- Header with session variable preservation
-- Single-line CREATE TABLE statements with `IF NOT EXISTS`
-- Multi-row INSERT statements (batched)
-- Footer with variable restoration
+- MySQL/MariaDB: session-preserving headers, backtick identifiers, hex vs text detection for blobs
+- PostgreSQL: UTF-8/standard_conforming defaults, double-quoted identifiers, bytea literals
+- SQL Server: ANSI quoted identifiers, constraint toggles, and `0x` binary literals
 
-All statements are terminated with `;\n` for reliable parsing during restore.
+Every statement is terminated with `;\n` for reliable parsing during restore regardless of provider.
 
 ## Command Reference
 
@@ -337,7 +342,7 @@ All statements are terminated with `;\n` for reliable parsing during restore.
 | `--source` | Source database URL | - |
 | `--source-env` | Environment variable with source URL | - |
 | `--output` | Output file path | - |
-| `--provider` | Database provider | `mysql` |
+| `--provider` | Database provider (`mysql|postgres|sqlserver`) | `mysql` |
 | `--tables` | Tables to include (comma-separated) | all |
 | `--exclude` | Tables to exclude (comma-separated) | none |
 | `--schema-only` | Dump schema only | `false` |
@@ -353,7 +358,7 @@ All statements are terminated with `;\n` for reliable parsing during restore.
 | `--destination` | Destination database URL | - |
 | `--destination-env` | Environment variable with destination URL | - |
 | `--input` | Input file path | - |
-| `--provider` | Database provider | `mysql` |
+| `--provider` | Database provider (`mysql|postgres|sqlserver`) | `mysql` |
 | `--disable-fk-checks` | Disable foreign key checks | `true` |
 
 ### `migrate`
@@ -364,7 +369,7 @@ All statements are terminated with `;\n` for reliable parsing during restore.
 | `--source-env` | Environment variable with source URL | - |
 | `--destination` | Destination database URL | - |
 | `--destination-env` | Environment variable with destination URL | - |
-| `--provider` | Database provider | `mysql` |
+| `--provider` | Database provider (`mysql|postgres|sqlserver`) | `mysql` |
 | `--tables` | Tables to include (comma-separated) | all |
 | `--exclude` | Tables to exclude (comma-separated) | none |
 | `--schema-only` | Migrate schema only | `false` |

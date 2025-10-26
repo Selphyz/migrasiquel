@@ -1,1 +1,1 @@
-pub mod sql_escape;
+pub mod dialects;
