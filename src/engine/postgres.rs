@@ -180,6 +180,44 @@ impl DbSession for PostgresSession {
             ));
         }
 
+        let unique_rows = sqlx::query(
+            "SELECT conname, pg_get_constraintdef(oid, true) AS constraint_def
+             FROM pg_constraint
+             WHERE conrelid = $1 AND contype = 'u'",
+        )
+        .bind(oid)
+        .fetch_all(&mut self.conn)
+        .await?;
+
+        for row in unique_rows {
+            let name: String = row.get("conname");
+            let def: String = row.get("constraint_def");
+            column_defs.push(format!(
+                "CONSTRAINT {} {}",
+                POSTGRES_DIALECT.quote_identifier(&name),
+                def
+            ));
+        }
+
+        let check_rows = sqlx::query(
+            "SELECT conname, pg_get_constraintdef(oid, true) AS constraint_def
+             FROM pg_constraint
+             WHERE conrelid = $1 AND contype = 'c'",
+        )
+        .bind(oid)
+        .fetch_all(&mut self.conn)
+        .await?;
+
+        for row in check_rows {
+            let name: String = row.get("conname");
+            let def: String = row.get("constraint_def");
+            column_defs.push(format!(
+                "CONSTRAINT {} {}",
+                POSTGRES_DIALECT.quote_identifier(&name),
+                def
+            ));
+        }
+
         let qualified = format_qualified_table(&POSTGRES_DIALECT, table);
         let create_stmt = format!(
             "CREATE TABLE IF NOT EXISTS {} (\n    {}\n);",
@@ -187,7 +225,28 @@ impl DbSession for PostgresSession {
             column_defs.join(",\n    ")
         );
 
-        Ok(create_stmt)
+        // Fetch and append indexes
+        let index_rows = sqlx::query(
+            "SELECT indexname, indexdef
+             FROM pg_indexes
+             WHERE schemaname = $1 AND tablename = $2
+             AND indexname NOT LIKE '%_pkey'",
+        )
+        .bind(&schema)
+        .bind(&name)
+        .fetch_all(&mut self.conn)
+        .await?;
+
+        let mut full_ddl = create_stmt;
+        for row in index_rows {
+            let _index_name: String = row.get(0);
+            let indexdef: String = row.get(1);
+            full_ddl.push('\n');
+            full_ddl.push_str(&indexdef);
+            full_ddl.push(';');
+        }
+
+        Ok(full_ddl)
     }
 
     async fn stream_rows(&mut self, table: &str) -> Result<(Vec<String>, RowStream)> {

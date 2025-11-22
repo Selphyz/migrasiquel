@@ -4,33 +4,28 @@ use crate::engine::value::SqlValue;
 use crate::util::dialects::mysql::MYSQL_DIALECT;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use futures::stream;
-use mysql_async::{prelude::*, Conn, Pool, Row};
-use mysql_common::value::Value;
+use futures::stream::{self, StreamExt};
+use sqlx::mysql::MySqlConnection;
+use sqlx::{Connection, MySql, Row, TypeInfo};
 
 pub struct MysqlEngine;
 
 #[async_trait]
 impl DbEngine for MysqlEngine {
     async fn connect(&self, url: &str) -> Result<Box<dyn DbSession>> {
-        let pool = Pool::new(url);
-        let conn = pool
-            .get_conn()
+        let conn = MySqlConnection::connect(url)
             .await
             .context("Failed to connect to MySQL database")?;
 
         Ok(Box::new(MysqlSession {
             conn,
-            pool,
             in_transaction: false,
         }))
     }
 }
 
 pub struct MysqlSession {
-    conn: Conn,
-    #[allow(dead_code)]
-    pool: Pool,
+    conn: MySqlConnection,
     in_transaction: bool,
 }
 
@@ -41,22 +36,26 @@ impl DbSession for MysqlSession {
     }
 
     async fn start_consistent_snapshot(&mut self) -> Result<()> {
-        self.conn
-            .query_drop("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        sqlx::query("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut self.conn)
             .await?;
-        self.conn
-            .query_drop("START TRANSACTION WITH CONSISTENT SNAPSHOT")
+        sqlx::query("START TRANSACTION WITH CONSISTENT SNAPSHOT")
+            .execute(&mut self.conn)
             .await?;
         self.in_transaction = true;
         Ok(())
     }
 
     async fn list_tables(&mut self, include: &[String], exclude: &[String]) -> Result<Vec<String>> {
-        let mut tables: Vec<String> = self
-            .conn
-            .query("SHOW TABLES")
+        let rows = sqlx::query("SHOW TABLES")
+            .fetch_all(&mut self.conn)
             .await
             .context("Failed to list tables")?;
+
+        let mut tables: Vec<String> = rows
+            .iter()
+            .map(|row| row.get::<String, _>(0))
+            .collect();
 
         if !include.is_empty() {
             tables.retain(|t| include.contains(t));
@@ -71,10 +70,12 @@ impl DbSession for MysqlSession {
 
     async fn show_create_table(&mut self, table: &str) -> Result<String> {
         let query = format!("SHOW CREATE TABLE `{}`", table.replace('`', "``"));
-        let row: Option<Row> = self.conn.query_first(&query).await?;
+        let row = sqlx::query(&query)
+            .fetch_optional(&mut self.conn)
+            .await?
+            .context("No CREATE TABLE result")?;
 
-        let row = row.context("No CREATE TABLE result")?;
-        let create_stmt: String = row.get(1).context("Missing CREATE TABLE statement")?;
+        let create_stmt: String = row.get(1);
 
         let minified = minify_create_table(&create_stmt);
         Ok(minified)
@@ -87,25 +88,29 @@ impl DbSession for MysqlSession {
              ORDER BY ORDINAL_POSITION",
             table.replace('\'', "''")
         );
-        let columns: Vec<String> = self.conn.query(&query).await?;
+        let col_rows = sqlx::query(&query)
+            .fetch_all(&mut self.conn)
+            .await?;
 
-        let query = format!("SELECT * FROM `{}`", table.replace('`', "``"));
-        let rows: Vec<Row> = self.conn.query(&query).await?;
+        let columns: Vec<String> = col_rows.iter().map(|row| row.get::<String, _>(0)).collect();
+
+        let data_query = format!("SELECT * FROM `{}`", table.replace('`', "``"));
+        let rows = sqlx::query(&data_query)
+            .fetch_all(&mut self.conn)
+            .await?;
 
         let value_rows: Vec<Result<Vec<SqlValue>>> = rows
-            .into_iter()
+            .iter()
             .map(|row| {
-                let mut values = Vec::with_capacity(row.len());
-                for i in 0..row.len() {
-                    let mysql_value: Value = row.get(i).unwrap_or(Value::NULL);
-                    values.push(convert_value(mysql_value));
+                let mut values = Vec::with_capacity(columns.len());
+                for i in 0..columns.len() {
+                    values.push(convert_sqlx_value(row, i));
                 }
                 Ok(values)
             })
             .collect();
 
         let row_stream = stream::iter(value_rows);
-
         Ok((columns, Box::pin(row_stream)))
     }
 
@@ -116,7 +121,10 @@ impl DbSession for MysqlSession {
             table.replace('\'', "''")
         );
 
-        let count: Option<u64> = self.conn.query_first(&query).await?;
+        let count: Option<u64> = sqlx::query_scalar(&query)
+            .fetch_optional(&mut self.conn)
+            .await?
+            .flatten();
         Ok(count.unwrap_or(0))
     }
 
@@ -131,8 +139,8 @@ impl DbSession for MysqlSession {
         }
 
         let sql = MYSQL_DIALECT.insert_values_sql(table, column_names, rows);
-        self.conn
-            .query_drop(sql)
+        sqlx::query(&sql)
+            .execute(&mut self.conn)
             .await
             .with_context(|| format!("Failed to insert batch into table '{}'", table))?;
 
@@ -140,20 +148,28 @@ impl DbSession for MysqlSession {
     }
 
     async fn disable_constraints(&mut self) -> Result<()> {
-        self.conn.query_drop("SET FOREIGN_KEY_CHECKS=0").await?;
-        self.conn.query_drop("SET UNIQUE_CHECKS=0").await?;
+        sqlx::query("SET FOREIGN_KEY_CHECKS=0")
+            .execute(&mut self.conn)
+            .await?;
+        sqlx::query("SET UNIQUE_CHECKS=0")
+            .execute(&mut self.conn)
+            .await?;
         Ok(())
     }
 
     async fn enable_constraints(&mut self) -> Result<()> {
-        self.conn.query_drop("SET FOREIGN_KEY_CHECKS=1").await?;
-        self.conn.query_drop("SET UNIQUE_CHECKS=1").await?;
+        sqlx::query("SET FOREIGN_KEY_CHECKS=1")
+            .execute(&mut self.conn)
+            .await?;
+        sqlx::query("SET UNIQUE_CHECKS=1")
+            .execute(&mut self.conn)
+            .await?;
         Ok(())
     }
 
     async fn execute(&mut self, sql: &str) -> Result<()> {
-        self.conn
-            .query_drop(sql)
+        sqlx::query(sql)
+            .execute(&mut self.conn)
             .await
             .context("Failed to execute SQL statement")?;
         Ok(())
@@ -161,60 +177,80 @@ impl DbSession for MysqlSession {
 
     async fn commit(&mut self) -> Result<()> {
         if self.in_transaction {
-            self.conn.query_drop("COMMIT").await?;
+            sqlx::query("COMMIT")
+                .execute(&mut self.conn)
+                .await?;
             self.in_transaction = false;
         }
         Ok(())
     }
 }
 
-fn convert_value(value: Value) -> SqlValue {
-    match value {
-        Value::NULL => SqlValue::Null,
-        Value::Bytes(bytes) => match String::from_utf8(bytes.clone()) {
-            Ok(s) => SqlValue::String(s),
-            Err(_) => SqlValue::Bytes(bytes),
-        },
-        Value::Int(v) => SqlValue::Int(v),
-        Value::UInt(v) => {
-            if v <= i64::MAX as u64 {
-                SqlValue::Int(v as i64)
-            } else {
-                SqlValue::Decimal(v.to_string())
-            }
-        }
-        Value::Float(v) => SqlValue::Float(v as f64),
-        Value::Double(v) => SqlValue::Float(v),
-        Value::Date(year, month, day, hour, minute, second, micro) => {
-            if hour == 0 && minute == 0 && second == 0 && micro == 0 {
-                SqlValue::Date {
-                    y: i32::from(year),
-                    m: u32::from(month),
-                    d: u32::from(day),
-                }
-            } else {
-                SqlValue::Timestamp {
-                    y: i32::from(year),
-                    m: u32::from(month),
-                    d: u32::from(day),
-                    hh: u32::from(hour),
-                    mm: u32::from(minute),
-                    ss: u32::from(second),
-                    us: micro,
-                }
-            }
-        }
-        Value::Time(neg, days, hours, minutes, seconds, micros) => {
-            let total_hours = days * 24 + u32::from(hours);
-            SqlValue::Time {
-                neg,
-                h: total_hours,
-                m: minutes as u32,
-                s: seconds as u32,
-                us: micros,
-            }
-        }
+/// Convert a SQLx MySQL row value to SqlValue
+fn convert_sqlx_value(row: &sqlx::mysql::MySqlRow, index: usize) -> SqlValue {
+    use chrono::prelude::*;
+
+    // Try each type in order of likelihood
+    // First try integer types
+    if let Ok(v) = row.try_get::<i64, _>(index) {
+        return SqlValue::Int(v);
     }
+
+    // Try bool
+    if let Ok(v) = row.try_get::<bool, _>(index) {
+        return SqlValue::Bool(v);
+    }
+
+    // Try float
+    if let Ok(v) = row.try_get::<f64, _>(index) {
+        return SqlValue::Float(v);
+    }
+
+    // Try NaiveDate
+    if let Ok(v) = row.try_get::<NaiveDate, _>(index) {
+        return SqlValue::Date {
+            y: v.year(),
+            m: v.month(),
+            d: v.day(),
+        };
+    }
+
+    // Try NaiveTime
+    if let Ok(v) = row.try_get::<NaiveTime, _>(index) {
+        return SqlValue::Time {
+            neg: false,
+            h: v.hour(),
+            m: v.minute(),
+            s: v.second(),
+            us: v.nanosecond() / 1000,
+        };
+    }
+
+    // Try NaiveDateTime
+    if let Ok(v) = row.try_get::<NaiveDateTime, _>(index) {
+        return SqlValue::Timestamp {
+            y: v.year(),
+            m: v.month(),
+            d: v.day(),
+            hh: v.hour(),
+            mm: v.minute(),
+            ss: v.second(),
+            us: (v.nanosecond() / 1000),
+        };
+    }
+
+    // Try string
+    if let Ok(v) = row.try_get::<String, _>(index) {
+        return SqlValue::String(v);
+    }
+
+    // Try bytes
+    if let Ok(v) = row.try_get::<Vec<u8>, _>(index) {
+        return SqlValue::Bytes(v);
+    }
+
+    // Default to null
+    SqlValue::Null
 }
 
 /// Minify CREATE TABLE statement to single line and add IF NOT EXISTS
