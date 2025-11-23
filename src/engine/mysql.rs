@@ -4,9 +4,9 @@ use crate::engine::value::SqlValue;
 use crate::util::dialects::mysql::MYSQL_DIALECT;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use futures::stream::{self, StreamExt};
+use futures::stream;
 use sqlx::mysql::MySqlConnection;
-use sqlx::{Connection, MySql, Row, TypeInfo};
+use sqlx::{Connection, Row};
 
 pub struct MysqlEngine;
 
@@ -182,6 +182,53 @@ impl DbSession for MysqlSession {
                 .await?;
             self.in_transaction = false;
         }
+        Ok(())
+    }
+
+    async fn create_table_from_columns(
+        &mut self,
+        table: &str,
+        column_names: &[String],
+        column_types: &[SqlValue],
+    ) -> Result<()> {
+        let mut sql = format!("CREATE TABLE `{}` (\n", table.replace('`', "``"));
+
+        for (i, (col_name, col_type)) in column_names.iter().zip(column_types.iter()).enumerate()
+        {
+            let col_quoted = format!("`{}`", col_name.replace('`', "``"));
+            let type_str = match col_type {
+                SqlValue::Int(_) => "INT".to_string(),
+                SqlValue::Float(_) => "FLOAT".to_string(),
+                SqlValue::Decimal(_) => "DECIMAL(10,2)".to_string(),
+                SqlValue::Bool(_) => "TINYINT(1)".to_string(),
+                SqlValue::String(_) => "VARCHAR(255)".to_string(),
+                SqlValue::Date { .. } => "DATE".to_string(),
+                SqlValue::Time { .. } => "TIME".to_string(),
+                SqlValue::Timestamp { .. } => "TIMESTAMP".to_string(),
+                SqlValue::Bytes(_) => "BLOB".to_string(),
+                SqlValue::Null => "VARCHAR(255)".to_string(),
+            };
+
+            let pk = if col_name == "id" && matches!(col_type, SqlValue::Int(_)) {
+                " PRIMARY KEY AUTO_INCREMENT"
+            } else {
+                ""
+            };
+
+            sql.push_str(&format!("  {} {}{}", col_quoted, type_str, pk));
+            if i < column_names.len() - 1 {
+                sql.push(',');
+            }
+            sql.push('\n');
+        }
+
+        sql.push_str(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        sqlx::query(&sql)
+            .execute(&mut self.conn)
+            .await
+            .context("Failed to create table")?;
+
         Ok(())
     }
 }

@@ -63,6 +63,14 @@ pub trait DbSession: Send {
 
     /// Commit current transaction
     async fn commit(&mut self) -> Result<()>;
+
+    /// Create a table from column definitions
+    async fn create_table_from_columns(
+        &mut self,
+        table: &str,
+        column_names: &[String],
+        column_types: &[SqlValue],
+    ) -> Result<()>;
 }
 
 /// Factory for creating database engines

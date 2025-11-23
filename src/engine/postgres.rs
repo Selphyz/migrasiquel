@@ -344,6 +344,53 @@ impl DbSession for PostgresSession {
         }
         Ok(())
     }
+
+    async fn create_table_from_columns(
+        &mut self,
+        table: &str,
+        column_names: &[String],
+        column_types: &[SqlValue],
+    ) -> Result<()> {
+        let qualified = format_qualified_table(&POSTGRES_DIALECT, table);
+        let mut column_defs = Vec::new();
+
+        for (col_name, col_type) in column_names.iter().zip(column_types.iter()) {
+            let col_quoted = POSTGRES_DIALECT.quote_identifier(col_name);
+            let type_str = match col_type {
+                SqlValue::Int(_) => "INTEGER",
+                SqlValue::Float(_) => "REAL",
+                SqlValue::Decimal(_) => "NUMERIC(10,2)",
+                SqlValue::Bool(_) => "BOOLEAN",
+                SqlValue::String(_) => "VARCHAR(255)",
+                SqlValue::Date { .. } => "DATE",
+                SqlValue::Time { .. } => "TIME",
+                SqlValue::Timestamp { .. } => "TIMESTAMP",
+                SqlValue::Bytes(_) => "BYTEA",
+                SqlValue::Null => "VARCHAR(255)",
+            };
+
+            let pk = if col_name == "id" && matches!(col_type, SqlValue::Int(_)) {
+                " PRIMARY KEY"
+            } else {
+                ""
+            };
+
+            column_defs.push(format!("{} {}{}", col_quoted, type_str, pk));
+        }
+
+        let sql = format!(
+            "CREATE TABLE IF NOT EXISTS {} (\n    {}\n);",
+            qualified,
+            column_defs.join(",\n    ")
+        );
+
+        sqlx::query(&sql)
+            .execute(&mut self.conn)
+            .await
+            .context("Failed to create table")?;
+
+        Ok(())
+    }
 }
 
 fn convert_pg_row(row: PgRow) -> Result<Vec<SqlValue>> {

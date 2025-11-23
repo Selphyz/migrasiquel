@@ -133,6 +133,45 @@ pub enum Commands {
         #[arg(long, default_value = "true")]
         disable_fk_checks: bool,
     },
+
+    /// Import CSV file to database table
+    Import {
+        /// Destination database URL (mysql://, postgres://)
+        #[arg(short, long)]
+        destination: Option<String>,
+
+        /// Environment variable containing destination URL
+        #[arg(long)]
+        destination_env: Option<String>,
+
+        /// Input CSV file path
+        #[arg(short, long)]
+        input: String,
+
+        /// Target table name
+        #[arg(short, long)]
+        table: String,
+
+        /// Database provider (mysql|postgres)
+        #[arg(long, default_value = "mysql", value_parser = ["mysql", "postgres"])]
+        provider: String,
+
+        /// Rows per INSERT batch
+        #[arg(long, default_value = "1000")]
+        batch_rows: usize,
+
+        /// Disable foreign key checks during import
+        #[arg(long, default_value = "true")]
+        disable_fk_checks: bool,
+
+        /// Column mapping: csv_col1:db_col1,csv_col2:db_col2
+        #[arg(long)]
+        columns: Option<String>,
+
+        /// Skip rows with errors instead of failing
+        #[arg(long, default_value = "true")]
+        skip_errors: bool,
+    },
 }
 
 impl Commands {

@@ -1,6 +1,7 @@
 mod cli;
 mod dump;
 mod engine;
+mod import;
 mod migrate;
 mod restore;
 mod util;
@@ -82,12 +83,12 @@ async fn main() -> Result<()> {
         } => {
             let source_url = Commands::get_url(&source, &source_env, "source")?;
             let dest_url = Commands::get_url(&destination, &destination_env, "destination")?;
-            
+
             println!("Source: {}", Commands::redact_url(&source_url));
             println!("Destination: {}", Commands::redact_url(&dest_url));
-            
+
             let engine = engine::create_engine(&provider)?;
-            
+
             let opts = migrate::MigrateOptions {
                 tables,
                 exclude,
@@ -97,8 +98,42 @@ async fn main() -> Result<()> {
                 consistent_snapshot,
                 disable_fk_checks,
             };
-            
+
             migrate::migrate(&*engine, &source_url, &dest_url, opts).await?;
+        }
+
+        Commands::Import {
+            destination,
+            destination_env,
+            input,
+            table,
+            provider,
+            batch_rows,
+            disable_fk_checks,
+            columns,
+            skip_errors,
+        } => {
+            let dest_url = Commands::get_url(&destination, &destination_env, "destination")?;
+
+            println!("Destination: {}", Commands::redact_url(&dest_url));
+
+            let engine = engine::create_engine(&provider)?;
+
+            let column_mapping = columns
+                .as_ref()
+                .map(|c| import::parse_column_mapping(c))
+                .transpose()?;
+
+            let opts = import::ImportOptions {
+                input,
+                table,
+                batch_rows,
+                disable_fk_checks,
+                skip_errors,
+                column_mapping,
+            };
+
+            import::import(&*engine, &dest_url, opts).await?;
         }
     }
 
