@@ -11,8 +11,7 @@ use futures::Stream;
 use std::pin::Pin;
 
 /// Stream of rows from a database query
-pub type RowStream =
-    Pin<Box<dyn Stream<Item = Result<Vec<SqlValue>>> + Send>>;
+pub type RowStream = Pin<Box<dyn Stream<Item = Result<Vec<SqlValue>>> + Send>>;
 
 /// Database engine trait for provider abstraction
 #[async_trait]
@@ -78,6 +77,9 @@ pub fn create_engine(provider: &str) -> Result<Box<dyn DbEngine>> {
     match provider.to_lowercase().as_str() {
         "mysql" => Ok(Box::new(mysql::MysqlEngine)),
         "postgres" => Ok(Box::new(postgres::PostgresEngine)),
-        _ => Err(anyhow::anyhow!("Unsupported database provider: {}", provider)),
+        _ => Err(anyhow::anyhow!(
+            "Unsupported database provider: {}",
+            provider
+        )),
     }
 }

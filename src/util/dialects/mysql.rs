@@ -49,10 +49,7 @@ impl SqlDialect for MysqlDialect {
                 us,
             } => {
                 if *us == 0 {
-                    format!(
-                        "'{:04}-{:02}-{:02} {:02}:{:02}:{:02}'",
-                        y, m, d, hh, mm, ss
-                    )
+                    format!("'{:04}-{:02}-{:02} {:02}:{:02}:{:02}'", y, m, d, hh, mm, ss)
                 } else {
                     format!(
                         "'{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}'",
@@ -63,12 +60,7 @@ impl SqlDialect for MysqlDialect {
         }
     }
 
-    fn insert_values_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        rows: &[Vec<SqlValue>],
-    ) -> String {
+    fn insert_values_sql(&self, table: &str, columns: &[String], rows: &[Vec<SqlValue>]) -> String {
         let mut sql = String::new();
         sql.push_str("INSERT INTO ");
         sql.push_str(&format_qualified_table(self, table));

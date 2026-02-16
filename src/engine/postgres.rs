@@ -270,14 +270,10 @@ impl DbSession for PostgresSession {
             format_qualified_table(&POSTGRES_DIALECT, table)
         );
 
-        let rows = sqlx::query(&select_sql)
-            .fetch_all(&mut self.conn)
-            .await?;
+        let rows = sqlx::query(&select_sql).fetch_all(&mut self.conn).await?;
 
-        let value_rows: Vec<Result<Vec<SqlValue>>> = rows
-            .into_iter()
-            .map(|row| convert_pg_row(row))
-            .collect();
+        let value_rows: Vec<Result<Vec<SqlValue>>> =
+            rows.into_iter().map(|row| convert_pg_row(row)).collect();
 
         let row_stream = stream::iter(value_rows);
         Ok((columns, Box::pin(row_stream)))

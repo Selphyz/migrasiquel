@@ -52,10 +52,7 @@ impl DbSession for MysqlSession {
             .await
             .context("Failed to list tables")?;
 
-        let mut tables: Vec<String> = rows
-            .iter()
-            .map(|row| row.get::<String, _>(0))
-            .collect();
+        let mut tables: Vec<String> = rows.iter().map(|row| row.get::<String, _>(0)).collect();
 
         if !include.is_empty() {
             tables.retain(|t| include.contains(t));
@@ -88,16 +85,12 @@ impl DbSession for MysqlSession {
              ORDER BY ORDINAL_POSITION",
             table.replace('\'', "''")
         );
-        let col_rows = sqlx::query(&query)
-            .fetch_all(&mut self.conn)
-            .await?;
+        let col_rows = sqlx::query(&query).fetch_all(&mut self.conn).await?;
 
         let columns: Vec<String> = col_rows.iter().map(|row| row.get::<String, _>(0)).collect();
 
         let data_query = format!("SELECT * FROM `{}`", table.replace('`', "``"));
-        let rows = sqlx::query(&data_query)
-            .fetch_all(&mut self.conn)
-            .await?;
+        let rows = sqlx::query(&data_query).fetch_all(&mut self.conn).await?;
 
         let value_rows: Vec<Result<Vec<SqlValue>>> = rows
             .iter()
@@ -177,9 +170,7 @@ impl DbSession for MysqlSession {
 
     async fn commit(&mut self) -> Result<()> {
         if self.in_transaction {
-            sqlx::query("COMMIT")
-                .execute(&mut self.conn)
-                .await?;
+            sqlx::query("COMMIT").execute(&mut self.conn).await?;
             self.in_transaction = false;
         }
         Ok(())
@@ -193,8 +184,7 @@ impl DbSession for MysqlSession {
     ) -> Result<()> {
         let mut sql = format!("CREATE TABLE `{}` (\n", table.replace('`', "``"));
 
-        for (i, (col_name, col_type)) in column_names.iter().zip(column_types.iter()).enumerate()
-        {
+        for (i, (col_name, col_type)) in column_names.iter().zip(column_types.iter()).enumerate() {
             let col_quoted = format!("`{}`", col_name.replace('`', "``"));
             let type_str = match col_type {
                 SqlValue::Int(_) => "INT".to_string(),

@@ -48,10 +48,7 @@ impl SqlDialect for PostgresDialect {
                 if *us == 0 {
                     format!("TIME '{}{:02}:{:02}:{:02}'", sign, h, m, s)
                 } else {
-                    format!(
-                        "TIME '{}{:02}:{:02}:{:02}.{:06}'",
-                        sign, h, m, s, us
-                    )
+                    format!("TIME '{}{:02}:{:02}:{:02}.{:06}'", sign, h, m, s, us)
                 }
             }
             SqlValue::Timestamp {
@@ -78,12 +75,7 @@ impl SqlDialect for PostgresDialect {
         }
     }
 
-    fn insert_values_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        rows: &[Vec<SqlValue>],
-    ) -> String {
+    fn insert_values_sql(&self, table: &str, columns: &[String], rows: &[Vec<SqlValue>]) -> String {
         let mut sql = String::new();
         sql.push_str("INSERT INTO ");
         sql.push_str(&format_qualified_table(self, table));

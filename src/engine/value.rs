@@ -10,8 +10,18 @@ pub enum SqlValue {
     Decimal(String),
     String(String),
     Bytes(Vec<u8>),
-    Date { y: i32, m: u32, d: u32 },
-    Time { neg: bool, h: u32, m: u32, s: u32, us: u32 },
+    Date {
+        y: i32,
+        m: u32,
+        d: u32,
+    },
+    Time {
+        neg: bool,
+        h: u32,
+        m: u32,
+        s: u32,
+        us: u32,
+    },
     Timestamp {
         y: i32,
         m: u32,

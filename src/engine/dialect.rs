@@ -12,16 +12,17 @@ pub trait SqlDialect: Send + Sync {
     fn to_literal(&self, value: &SqlValue) -> String;
 
     /// Build an INSERT ... VALUES statement for the provided rows.
-    fn insert_values_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        rows: &[Vec<SqlValue>],
-    ) -> String;
+    fn insert_values_sql(&self, table: &str, columns: &[String], rows: &[Vec<SqlValue>]) -> String;
 
     /// Format a drop table statement using the dialect's identifier rules.
-    fn drop_table_statement(&self, table: &str) -> String where Self: Sized {
-        format!("DROP TABLE IF EXISTS {}", format_qualified_table(self, table))
+    fn drop_table_statement(&self, table: &str) -> String
+    where
+        Self: Sized,
+    {
+        format!(
+            "DROP TABLE IF EXISTS {}",
+            format_qualified_table(self, table)
+        )
     }
 }
 

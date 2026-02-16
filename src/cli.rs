@@ -132,6 +132,10 @@ pub enum Commands {
         /// Disable foreign key checks during migration
         #[arg(long, default_value = "true")]
         disable_fk_checks: bool,
+
+        /// Skip rows with errors instead of failing
+        #[arg(long, default_value = "false")]
+        skip_errors: bool,
     },
 
     /// Import CSV file to database table
@@ -176,14 +180,22 @@ pub enum Commands {
 
 impl Commands {
     /// Get database URL from either direct argument or environment variable
-    pub fn get_url(direct: &Option<String>, env_var: &Option<String>, url_type: &str) -> anyhow::Result<String> {
+    pub fn get_url(
+        direct: &Option<String>,
+        env_var: &Option<String>,
+        url_type: &str,
+    ) -> anyhow::Result<String> {
         if let Some(url) = direct {
             Ok(url.clone())
         } else if let Some(env) = env_var {
             std::env::var(env)
                 .map_err(|_| anyhow::anyhow!("Environment variable {} not found", env))
         } else {
-            Err(anyhow::anyhow!("Either --{} or --{}-env must be provided", url_type, url_type))
+            Err(anyhow::anyhow!(
+                "Either --{} or --{}-env must be provided",
+                url_type,
+                url_type
+            ))
         }
     }
 
